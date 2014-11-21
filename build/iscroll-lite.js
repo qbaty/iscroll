@@ -1,6 +1,5 @@
-/*! iScroll v5.0.0 ~ (c) 2008-2013 Matteo Spinelli ~ http://cubiq.org/license */
-var IScroll = (function (window, document, Math) {
-
+/*! iScroll v5.1.3 ~ (c) 2008-2014 Matteo Spinelli ~ http://cubiq.org/license */
+(function (window, document, Math) {
 var rAF = window.requestAnimationFrame	||
 	window.webkitRequestAnimationFrame	||
 	window.mozRequestAnimationFrame		||
@@ -48,12 +47,19 @@ var utils = (function () {
 		el.removeEventListener(type, fn, !!capture);
 	};
 
-	me.momentum = function (current, start, time, lowerMargin, wrapperSize) {
+	me.prefixPointerEvent = function (pointerEvent) {
+		return window.MSPointerEvent ? 
+			'MSPointer' + pointerEvent.charAt(9).toUpperCase() + pointerEvent.substr(10):
+			pointerEvent;
+	};
+
+	me.momentum = function (current, start, time, lowerMargin, wrapperSize, deceleration) {
 		var distance = current - start,
 			speed = Math.abs(distance) / time,
 			destination,
-			duration,
-			deceleration = 0.0006;
+			duration;
+
+		deceleration = deceleration === undefined ? 0.0006 : deceleration;
 
 		destination = current + ( speed * speed ) / ( 2 * deceleration ) * ( distance < 0 ? -1 : 1 );
 		duration = speed / deceleration;
@@ -80,16 +86,18 @@ var utils = (function () {
 		hasTransform: _transform !== false,
 		hasPerspective: _prefixStyle('perspective') in _elementStyle,
 		hasTouch: 'ontouchstart' in window,
-		hasPointer: navigator.msPointerEnabled,
+		hasPointer: window.PointerEvent || window.MSPointerEvent, // IE10 is prefixed
 		hasTransition: _prefixStyle('transition') in _elementStyle
 	});
 
-	me.isAndroidBrowser = /Android/.test(window.navigator.appVersion) && /Version\/\d/.test(window.navigator.appVersion);
+	// This should find all Android browsers lower than build 535.19 (both stock browser and webview)
+	me.isBadAndroid = /Android /.test(window.navigator.appVersion) && !(/Chrome\/\d/.test(window.navigator.appVersion));
 
 	me.extend(me.style = {}, {
 		transform: _transform,
 		transitionTimingFunction: _prefixStyle('transitionTimingFunction'),
 		transitionDuration: _prefixStyle('transitionDuration'),
+		transitionDelay: _prefixStyle('transitionDelay'),
 		transformOrigin: _prefixStyle('transformOrigin')
 	});
 
@@ -114,7 +122,7 @@ var utils = (function () {
 		}
 
 		var re = new RegExp("(^|\\s)" + c + "(\\s|$)", 'g');
-		e.className = e.className.replace(re, '');
+		e.className = e.className.replace(re, ' ');
 	};
 
 	me.offset = function (el) {
@@ -134,6 +142,16 @@ var utils = (function () {
 		};
 	};
 
+	me.preventDefaultException = function (el, exceptions) {
+		for ( var i in exceptions ) {
+			if ( exceptions[i].test(el[i]) ) {
+				return true;
+			}
+		}
+
+		return false;
+	};
+
 	me.extend(me.eventType = {}, {
 		touchstart: 1,
 		touchmove: 1,
@@ -142,6 +160,10 @@ var utils = (function () {
 		mousedown: 2,
 		mousemove: 2,
 		mouseup: 2,
+
+		pointerdown: 3,
+		pointermove: 3,
+		pointerup: 3,
 
 		MSPointerDown: 3,
 		MSPointerMove: 3,
@@ -185,8 +207,8 @@ var utils = (function () {
 		elastic: {
 			style: '',
 			fn: function (k) {
-				f = 0.22;
-				e = 0.4;
+				var f = 0.22,
+					e = 0.4;
 
 				if ( k === 0 ) { return 0; }
 				if ( k == 1 ) { return 1; }
@@ -208,7 +230,7 @@ var utils = (function () {
 		var target = e.target,
 			ev;
 
-		if (target.tagName != 'SELECT' && target.tagName != 'INPUT' && target.tagName != 'TEXTAREA') {
+		if ( !(/(SELECT|INPUT|TEXTAREA)/i).test(target.tagName) ) {
 			ev = document.createEvent('MouseEvents');
 			ev.initMouseEvent('click', true, true, e.view, 1,
 				target.screenX, target.screenY, target.clientX, target.clientY,
@@ -243,6 +265,7 @@ function IScroll (el, options) {
 		bounceEasing: '',
 
 		preventDefault: true,
+		preventDefaultException: { tagName: /^(INPUT|TEXTAREA|BUTTON|SELECT)$/ },
 
 		HWCompositing: true,
 		useTransition: true,
@@ -272,6 +295,8 @@ function IScroll (el, options) {
 
 	this.options.bounceEasing = typeof this.options.bounceEasing == 'string' ? utils.ease[this.options.bounceEasing] || utils.ease.circular : this.options.bounceEasing;
 
+	this.options.resizePolling = this.options.resizePolling === undefined ? 60 : this.options.resizePolling;
+
 	if ( this.options.tap === true ) {
 		this.options.tap = 'tap';
 	}
@@ -281,6 +306,8 @@ function IScroll (el, options) {
 	// Some defaults	
 	this.x = 0;
 	this.y = 0;
+	this.directionX = 0;
+	this.directionY = 0;
 	this._events = {};
 
 // INSERT POINT: DEFAULTS
@@ -293,7 +320,7 @@ function IScroll (el, options) {
 }
 
 IScroll.prototype = {
-	version: '5.0.0',
+	version: '5.1.3',
 
 	_init: function () {
 		this._initEvents();
@@ -309,23 +336,31 @@ IScroll.prototype = {
 	},
 
 	_transitionEnd: function (e) {
-		if ( e.target != this.scroller ) {
+		if ( e.target != this.scroller || !this.isInTransition ) {
 			return;
 		}
 
-		this._transitionTime(0);
+		this._transitionTime();
 		if ( !this.resetPosition(this.options.bounceTime) ) {
+			this.isInTransition = false;
 			this._execEvent('scrollEnd');
 		}
 	},
 
 	_start: function (e) {
+		// React to left mouse button only
+		if ( utils.eventType[e.type] != 1 ) {
+			if ( e.button !== 0 ) {
+				return;
+			}
+		}
+
 		if ( !this.enabled || (this.initiated && utils.eventType[e.type] !== this.initiated) ) {
 			return;
 		}
 
-		if ( this.options.preventDefault && !utils.isAndroidBrowser ) {
-			e.preventDefault();		// This seems to break default Android browser
+		if ( this.options.preventDefault && !utils.isBadAndroid && !utils.preventDefaultException(e.target, this.options.preventDefaultException) ) {
+			e.preventDefault();
 		}
 
 		var point = e.touches ? e.touches[0] : e,
@@ -341,24 +376,26 @@ IScroll.prototype = {
 
 		this._transitionTime();
 
-		this.isAnimating = false;
 		this.startTime = utils.getTime();
 
 		if ( this.options.useTransition && this.isInTransition ) {
-			pos = this.getComputedPosition();
-
-			this._translate(Math.round(pos.x), Math.round(pos.y));
 			this.isInTransition = false;
+			pos = this.getComputedPosition();
+			this._translate(Math.round(pos.x), Math.round(pos.y));
+			this._execEvent('scrollEnd');
+		} else if ( !this.options.useTransition && this.isAnimating ) {
+			this.isAnimating = false;
+			this._execEvent('scrollEnd');
 		}
 
-		this.startX = this.x;
-		this.startY = this.y;
+		this.startX    = this.x;
+		this.startY    = this.y;
 		this.absStartX = this.x;
 		this.absStartY = this.y;
-		this.pointX = point.pageX;
-		this.pointY = point.pageY;
+		this.pointX    = point.pageX;
+		this.pointY    = point.pageY;
 
-		this._execEvent('scrollStart');
+		this._execEvent('beforeScrollStart');
 	},
 
 	_move: function (e) {
@@ -421,8 +458,11 @@ IScroll.prototype = {
 			deltaX = 0;
 		}
 
-		newX = this.x + (this.hasHorizontalScroll ? deltaX : 0);
-		newY = this.y + (this.hasVerticalScroll ? deltaY : 0);
+		deltaX = this.hasHorizontalScroll ? deltaX : 0;
+		deltaY = this.hasVerticalScroll ? deltaY : 0;
+
+		newX = this.x + deltaX;
+		newY = this.y + deltaY;
 
 		// Slow down if outside of the boundaries
 		if ( newX > 0 || newX < this.maxScrollX ) {
@@ -434,6 +474,10 @@ IScroll.prototype = {
 
 		this.directionX = deltaX > 0 ? -1 : deltaX < 0 ? 1 : 0;
 		this.directionY = deltaY > 0 ? -1 : deltaY < 0 ? 1 : 0;
+
+		if ( !this.moved ) {
+			this._execEvent('scrollStart');
+		}
 
 		this.moved = true;
 
@@ -456,8 +500,8 @@ IScroll.prototype = {
 			return;
 		}
 
-		if ( this.options.preventDefault ) {
-			e.preventDefault();		// TODO: check if needed
+		if ( this.options.preventDefault && !utils.preventDefaultException(e.target, this.options.preventDefaultException) ) {
+			e.preventDefault();
 		}
 
 		var point = e.changedTouches ? e.changedTouches[0] : e,
@@ -471,8 +515,6 @@ IScroll.prototype = {
 			time = 0,
 			easing = '';
 
-		this.scrollTo(newX, newY);	// ensures that the last position is rounded
-
 		this.isInTransition = 0;
 		this.initiated = 0;
 		this.endTime = utils.getTime();
@@ -481,6 +523,8 @@ IScroll.prototype = {
 		if ( this.resetPosition(this.options.bounceTime) ) {
 			return;
 		}
+
+		this.scrollTo(newX, newY);	// ensures that the last position is rounded
 
 		// we scrolled less than 10 pixels
 		if ( !this.moved ) {
@@ -492,6 +536,7 @@ IScroll.prototype = {
 				utils.click(e);
 			}
 
+			this._execEvent('scrollCancel');
 			return;
 		}
 
@@ -502,27 +547,15 @@ IScroll.prototype = {
 
 		// start momentum animation if needed
 		if ( this.options.momentum && duration < 300 ) {
-			momentumX = this.hasHorizontalScroll ? utils.momentum(this.x, this.startX, duration, this.maxScrollX, this.options.bounce ? this.wrapperWidth : 0) : { destination: newX, duration: 0 };
-			momentumY = this.hasVerticalScroll ? utils.momentum(this.y, this.startY, duration, this.maxScrollY, this.options.bounce ? this.wrapperHeight : 0) : { destination: newY, duration: 0 };
+			momentumX = this.hasHorizontalScroll ? utils.momentum(this.x, this.startX, duration, this.maxScrollX, this.options.bounce ? this.wrapperWidth : 0, this.options.deceleration) : { destination: newX, duration: 0 };
+			momentumY = this.hasVerticalScroll ? utils.momentum(this.y, this.startY, duration, this.maxScrollY, this.options.bounce ? this.wrapperHeight : 0, this.options.deceleration) : { destination: newY, duration: 0 };
 			newX = momentumX.destination;
 			newY = momentumY.destination;
 			time = Math.max(momentumX.duration, momentumY.duration);
 			this.isInTransition = 1;
 		}
 
-		if ( this.options.snap ) {
-			var snap = this._nearestSnap(newX, newY);
-			this.currentPage = snap;
-			newX = snap.x;
-			newY = snap.y;
-			time = this.options.snapSpeed || Math.max(
-					Math.max(
-						Math.min(distanceX, 1000),
-						Math.min(distanceX, 1000)
-					), 300);
-
-			easing = this.options.bounceEasing;
-		}
+// INSERT POINT: _end
 
 		if ( newX != this.x || newY != this.y ) {
 			// change easing function when scroller goes out of the boundaries
@@ -544,15 +577,10 @@ IScroll.prototype = {
 
 		this.resizeTimeout = setTimeout(function () {
 			that.refresh();
-			that.resetPosition();
-		}, 60);
+		}, this.options.resizePolling);
 	},
 
 	resetPosition: function (time) {
-		if ( this.x <= 0 && this.x >= this.maxScrollX && this.y <= 0 && this.y >= this.maxScrollY ) {
-			return false;
-		}
-
 		var x = this.x,
 			y = this.y;
 
@@ -570,11 +598,8 @@ IScroll.prototype = {
 			y = this.maxScrollY;
 		}
 
-		if ( this.options.snap ) {
-			var snap = this._nearestSnap(x, y);
-			this.currentPage = snap;
-			x = snap.x;
-			y = snap.y;
+		if ( x == this.x && y == this.y ) {
+			return false;
 		}
 
 		this.scrollTo(x, y, time, this.options.bounceEasing);
@@ -591,7 +616,7 @@ IScroll.prototype = {
 	},
 
 	refresh: function () {
-		var rf = this.wrapper.offsetHeight;		// Force refresh
+		var rf = this.wrapper.offsetHeight;		// Force reflow
 
 		this.wrapperWidth	= this.wrapper.clientWidth;
 		this.wrapperHeight	= this.wrapper.clientHeight;
@@ -601,27 +626,36 @@ IScroll.prototype = {
 		this.scrollerWidth	= this.scroller.offsetWidth;
 		this.scrollerHeight	= this.scroller.offsetHeight;
 
-/* REPLACE END: refresh */
-
 		this.maxScrollX		= this.wrapperWidth - this.scrollerWidth;
 		this.maxScrollY		= this.wrapperHeight - this.scrollerHeight;
 
-		if ( this.maxScrollX > 0 ) {
-			this.maxScrollX = 0;
-		}
-
-		if ( this.maxScrollY > 0 ) {
-			this.maxScrollY = 0;
-		}
+/* REPLACE END: refresh */
 
 		this.hasHorizontalScroll	= this.options.scrollX && this.maxScrollX < 0;
 		this.hasVerticalScroll		= this.options.scrollY && this.maxScrollY < 0;
 
+		if ( !this.hasHorizontalScroll ) {
+			this.maxScrollX = 0;
+			this.scrollerWidth = this.wrapperWidth;
+		}
+
+		if ( !this.hasVerticalScroll ) {
+			this.maxScrollY = 0;
+			this.scrollerHeight = this.wrapperHeight;
+		}
+
 		this.endTime = 0;
+		this.directionX = 0;
+		this.directionY = 0;
 
 		this.wrapperOffset = utils.offset(this.wrapper);
 
 		this._execEvent('refresh');
+
+		this.resetPosition();
+
+// INSERT POINT: _refresh
+
 	},
 
 	on: function (type, fn) {
@@ -630,6 +664,18 @@ IScroll.prototype = {
 		}
 
 		this._events[type].push(fn);
+	},
+
+	off: function (type, fn) {
+		if ( !this._events[type] ) {
+			return;
+		}
+
+		var index = this._events[type].indexOf(fn);
+
+		if ( index > -1 ) {
+			this._events[type].splice(index, 1);
+		}
 	},
 
 	_execEvent: function (type) {
@@ -645,7 +691,7 @@ IScroll.prototype = {
 		}
 
 		for ( ; i < l; i++ ) {
-			this._events[type][i].call(this);
+			this._events[type][i].apply(this, [].slice.call(arguments, 1));
 		}
 	},
 
@@ -659,6 +705,8 @@ IScroll.prototype = {
 
 	scrollTo: function (x, y, time, easing) {
 		easing = easing || utils.ease.circular;
+
+		this.isInTransition = this.options.useTransition && time > 0;
 
 		if ( !time || (this.options.useTransition && easing.style) ) {
 			this._transitionTimingFunction(easing.style);
@@ -695,14 +743,19 @@ IScroll.prototype = {
 		pos.left = pos.left > 0 ? 0 : pos.left < this.maxScrollX ? this.maxScrollX : pos.left;
 		pos.top  = pos.top  > 0 ? 0 : pos.top  < this.maxScrollY ? this.maxScrollY : pos.top;
 
-		time = time === undefined || null || 'auto' ? Math.max(Math.abs(pos.left)*2, Math.abs(pos.top)*2) : time;
+		time = time === undefined || time === null || time === 'auto' ? Math.max(Math.abs(this.x-pos.left), Math.abs(this.y-pos.top)) : time;
 
 		this.scrollTo(pos.left, pos.top, time, easing);
 	},
 
 	_transitionTime: function (time) {
 		time = time || 0;
+
 		this.scrollerStyle[utils.style.transitionDuration] = time + 'ms';
+
+		if ( !time && utils.isBadAndroid ) {
+			this.scrollerStyle[utils.style.transitionDuration] = '0.001s';
+		}
 
 // INSERT POINT: _transitionTime
 
@@ -745,19 +798,25 @@ IScroll.prototype = {
 		eventType(window, 'orientationchange', this);
 		eventType(window, 'resize', this);
 
-		eventType(this.wrapper, 'mousedown', this);
-		eventType(target, 'mousemove', this);
-		eventType(target, 'mousecancel', this);
-		eventType(target, 'mouseup', this);
-
-		if ( utils.hasPointer ) {
-			eventType(this.wrapper, 'MSPointerDown', this);
-			eventType(target, 'MSPointerMove', this);
-			eventType(target, 'MSPointerCancel', this);
-			eventType(target, 'MSPointerUp', this);
+		if ( this.options.click ) {
+			eventType(this.wrapper, 'click', this, true);
 		}
 
-		if ( utils.hasTouch ) {
+		if ( !this.options.disableMouse ) {
+			eventType(this.wrapper, 'mousedown', this);
+			eventType(target, 'mousemove', this);
+			eventType(target, 'mousecancel', this);
+			eventType(target, 'mouseup', this);
+		}
+
+		if ( utils.hasPointer && !this.options.disablePointer ) {
+			eventType(this.wrapper, utils.prefixPointerEvent('pointerdown'), this);
+			eventType(target, utils.prefixPointerEvent('pointermove'), this);
+			eventType(target, utils.prefixPointerEvent('pointercancel'), this);
+			eventType(target, utils.prefixPointerEvent('pointerup'), this);
+		}
+
+		if ( utils.hasTouch && !this.options.disableTouch ) {
 			eventType(this.wrapper, 'touchstart', this);
 			eventType(target, 'touchmove', this);
 			eventType(target, 'touchcancel', this);
@@ -779,8 +838,8 @@ IScroll.prototype = {
 			x = +(matrix[12] || matrix[4]);
 			y = +(matrix[13] || matrix[5]);
 		} else {
-			x = +matrix.left.replace(/[^-\d]/g, '');
-			y = +matrix.top.replace(/[^-\d]/g, '');
+			x = +matrix.left.replace(/[^-\d.]/g, '');
+			y = +matrix.top.replace(/[^-\d.]/g, '');
 		}
 
 		return { x: x, y: y };
@@ -801,7 +860,11 @@ IScroll.prototype = {
 			if ( now >= destTime ) {
 				that.isAnimating = false;
 				that._translate(destX, destY);
-				that.resetPosition(that.options.bounceTime);
+
+				if ( !that.resetPosition(that.options.bounceTime) ) {
+					that._execEvent('scrollEnd');
+				}
+
 				return;
 			}
 
@@ -822,19 +885,23 @@ IScroll.prototype = {
 	handleEvent: function (e) {
 		switch ( e.type ) {
 			case 'touchstart':
+			case 'pointerdown':
 			case 'MSPointerDown':
 			case 'mousedown':
 				this._start(e);
 				break;
 			case 'touchmove':
+			case 'pointermove':
 			case 'MSPointerMove':
 			case 'mousemove':
 				this._move(e);
 				break;
 			case 'touchend':
+			case 'pointerup':
 			case 'MSPointerUp':
 			case 'mouseup':
 			case 'touchcancel':
+			case 'pointercancel':
 			case 'MSPointerCancel':
 			case 'mousecancel':
 				this._end(e);
@@ -849,6 +916,7 @@ IScroll.prototype = {
 			case 'MSTransitionEnd':
 				this._transitionEnd(e);
 				break;
+			case 'wheel':
 			case 'DOMMouseScroll':
 			case 'mousewheel':
 				this._wheel(e);
@@ -856,11 +924,21 @@ IScroll.prototype = {
 			case 'keydown':
 				this._key(e);
 				break;
+			case 'click':
+				if ( !e._constructed ) {
+					e.preventDefault();
+					e.stopPropagation();
+				}
+				break;
 		}
 	}
 };
-IScroll.ease = utils.ease;
+IScroll.utils = utils;
 
-return IScroll;
+if ( typeof module != 'undefined' && module.exports ) {
+	module.exports = IScroll;
+} else {
+	window.IScroll = IScroll;
+}
 
 })(window, document, Math);

@@ -36,6 +36,10 @@
 	},
 
 	_key: function (e) {
+		if ( !this.enabled ) {
+			return;
+		}
+
 		var snap = this.options.snap,	// we are using this alot, better to cache it
 			newX = snap ? this.currentPage.pageX : this.x,
 			newY = snap ? this.currentPage.pageY : this.y,
@@ -88,6 +92,8 @@
 			case this.options.keyBindings.down:
 				newY -= snap ? 1 : 5 + this.keyAcceleration>>0;
 				break;
+			default:
+				return;
 		}
 
 		if ( snap ) {

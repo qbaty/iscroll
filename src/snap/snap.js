@@ -1,6 +1,5 @@
 
 	_initSnap: function () {
-		this.pages = [];
 		this.currentPage = {};
 
 		if ( typeof this.options.snap == 'string' ) {
@@ -15,6 +14,12 @@
 				stepX = this.options.snapStepX || this.wrapperWidth,
 				stepY = this.options.snapStepY || this.wrapperHeight,
 				el;
+
+			this.pages = [];
+
+			if ( !this.wrapperWidth || !this.wrapperHeight || !this.scrollerWidth || !this.scrollerHeight ) {
+				return;
+			}
 
 			if ( this.options.snap === true ) {
 				cx = Math.round( stepX / 2 );
@@ -48,7 +53,7 @@
 				n = -1;
 
 				for ( ; i < l; i++ ) {
-					if ( i === 0 || el[i].offsetLeft < el[i-1].offsetLeft ) {
+					if ( i === 0 || el[i].offsetLeft <= el[i-1].offsetLeft ) {
 						m = 0;
 						n++;
 					}
@@ -71,16 +76,13 @@
 						cy: cy
 					};
 
-					m++;
+					if ( x > this.maxScrollX ) {
+						m++;
+					}
 				}
 			}
 
-			this.currentPage = {
-				x: this.pages[0][0].x,
-				y: this.pages[0][0].y,
-				pageX: 0,
-				pageY: 0
-			};
+			this.goToPage(this.currentPage.pageX || 0, this.currentPage.pageY || 0, 0);
 
 			// Update snap threshold if needed
 			if ( this.options.snapThreshold % 1 === 0 ) {
@@ -108,10 +110,15 @@
 	},
 
 	_nearestSnap: function (x, y) {
+		if ( !this.pages.length ) {
+			return { x: 0, y: 0, pageX: 0, pageY: 0 };
+		}
+
 		var i = 0,
 			l = this.pages.length,
 			m = 0;
 
+		// Check if we exceeded the snap threshold
 		if ( Math.abs(x - this.absStartX) < this.snapThresholdX &&
 			Math.abs(y - this.absStartY) < this.snapThresholdY ) {
 			return this.currentPage;
@@ -186,8 +193,8 @@
 			x = 0;
 		}
 
-		if ( y >= this.pages[0].length ) {
-			y = this.pages[0].length - 1;
+		if ( y >= this.pages[x].length ) {
+			y = this.pages[x].length - 1;
 		} else if ( y < 0 ) {
 			y = 0;
 		}
@@ -195,11 +202,11 @@
 		var posX = this.pages[x][y].x,
 			posY = this.pages[x][y].y;
 
-		time = time || this.options.snapSpeed || Math.max(
+		time = time === undefined ? this.options.snapSpeed || Math.max(
 			Math.max(
 				Math.min(Math.abs(posX - this.x), 1000),
 				Math.min(Math.abs(posY - this.y), 1000)
-			), 300);
+			), 300) : time;
 
 		this.currentPage = {
 			x: posX,
@@ -217,7 +224,7 @@
 
 		x++;
 
-		if ( x >= this.pages.length && this.hasVericalScroll ) {
+		if ( x >= this.pages.length && this.hasVerticalScroll ) {
 			x = 0;
 			y++;
 		}
@@ -231,7 +238,7 @@
 
 		x--;
 
-		if ( x < 0 && this.hasVericalScroll ) {
+		if ( x < 0 && this.hasVerticalScroll ) {
 			x = 0;
 			y--;
 		}

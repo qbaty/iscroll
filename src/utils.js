@@ -1,4 +1,3 @@
-
 var rAF = window.requestAnimationFrame	||
 	window.webkitRequestAnimationFrame	||
 	window.mozRequestAnimationFrame		||
@@ -46,12 +45,19 @@ var utils = (function () {
 		el.removeEventListener(type, fn, !!capture);
 	};
 
-	me.momentum = function (current, start, time, lowerMargin, wrapperSize) {
+	me.prefixPointerEvent = function (pointerEvent) {
+		return window.MSPointerEvent ? 
+			'MSPointer' + pointerEvent.charAt(9).toUpperCase() + pointerEvent.substr(10):
+			pointerEvent;
+	};
+
+	me.momentum = function (current, start, time, lowerMargin, wrapperSize, deceleration) {
 		var distance = current - start,
 			speed = Math.abs(distance) / time,
 			destination,
-			duration,
-			deceleration = 0.0006;
+			duration;
+
+		deceleration = deceleration === undefined ? 0.0006 : deceleration;
 
 		destination = current + ( speed * speed ) / ( 2 * deceleration ) * ( distance < 0 ? -1 : 1 );
 		duration = speed / deceleration;
@@ -78,16 +84,18 @@ var utils = (function () {
 		hasTransform: _transform !== false,
 		hasPerspective: _prefixStyle('perspective') in _elementStyle,
 		hasTouch: 'ontouchstart' in window,
-		hasPointer: navigator.msPointerEnabled,
+		hasPointer: window.PointerEvent || window.MSPointerEvent, // IE10 is prefixed
 		hasTransition: _prefixStyle('transition') in _elementStyle
 	});
 
-	me.isAndroidBrowser = /Android/.test(window.navigator.appVersion) && /Version\/\d/.test(window.navigator.appVersion);
+	// This should find all Android browsers lower than build 535.19 (both stock browser and webview)
+	me.isBadAndroid = /Android /.test(window.navigator.appVersion) && !(/Chrome\/\d/.test(window.navigator.appVersion));
 
 	me.extend(me.style = {}, {
 		transform: _transform,
 		transitionTimingFunction: _prefixStyle('transitionTimingFunction'),
 		transitionDuration: _prefixStyle('transitionDuration'),
+		transitionDelay: _prefixStyle('transitionDelay'),
 		transformOrigin: _prefixStyle('transformOrigin')
 	});
 
@@ -112,7 +120,7 @@ var utils = (function () {
 		}
 
 		var re = new RegExp("(^|\\s)" + c + "(\\s|$)", 'g');
-		e.className = e.className.replace(re, '');
+		e.className = e.className.replace(re, ' ');
 	};
 
 	me.offset = function (el) {
@@ -132,6 +140,16 @@ var utils = (function () {
 		};
 	};
 
+	me.preventDefaultException = function (el, exceptions) {
+		for ( var i in exceptions ) {
+			if ( exceptions[i].test(el[i]) ) {
+				return true;
+			}
+		}
+
+		return false;
+	};
+
 	me.extend(me.eventType = {}, {
 		touchstart: 1,
 		touchmove: 1,
@@ -140,6 +158,10 @@ var utils = (function () {
 		mousedown: 2,
 		mousemove: 2,
 		mouseup: 2,
+
+		pointerdown: 3,
+		pointermove: 3,
+		pointerup: 3,
 
 		MSPointerDown: 3,
 		MSPointerMove: 3,
@@ -183,8 +205,8 @@ var utils = (function () {
 		elastic: {
 			style: '',
 			fn: function (k) {
-				f = 0.22;
-				e = 0.4;
+				var f = 0.22,
+					e = 0.4;
 
 				if ( k === 0 ) { return 0; }
 				if ( k == 1 ) { return 1; }
@@ -206,7 +228,7 @@ var utils = (function () {
 		var target = e.target,
 			ev;
 
-		if (target.tagName != 'SELECT' && target.tagName != 'INPUT' && target.tagName != 'TEXTAREA') {
+		if ( !(/(SELECT|INPUT|TEXTAREA)/i).test(target.tagName) ) {
 			ev = document.createEvent('MouseEvents');
 			ev.initMouseEvent('click', true, true, e.view, 1,
 				target.screenX, target.screenY, target.clientX, target.clientY,

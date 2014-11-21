@@ -8,9 +8,11 @@ var uglify = require('uglify-js');
 var banner = '/*! iScroll v' + pkg.version + ' ~ (c) 2008-' + (new Date().getFullYear()) + ' Matteo Spinelli ~ http://cubiq.org/license */\n';
 
 var releases = {
-	// Main releases
 	lite: {
-		files: ['default/_animate.js', 'default/handleEvent.js']
+		files: [
+			'default/_animate.js',
+			'default/handleEvent.js'
+		]
 	},
 
 	iscroll: {
@@ -51,9 +53,19 @@ var releases = {
 			'indicator/indicator.js'
 		],
 		postProcessing: [ 'zoom/build.json', 'indicator/build.json', 'wheel/build.json', 'snap/build.json', 'keys/build.json' ]
-	}
+	},
 
-	// Additional releases TBD
+	infinite: {
+		files: [
+			'wheel/wheel.js',
+			'snap/snap.js',
+			'keys/keys.js',
+			'probe/_animate.js',
+			'infinite/infinite.js',
+			'default/handleEvent.js',
+		],
+		postProcessing: [ 'wheel/build.json', 'snap/build.json', 'keys/build.json', 'infinite/build.json', 'probe/build.json' ]
+	}
 };
 
 var args = process.argv.slice(2);
@@ -63,7 +75,7 @@ if ( !args.length ) {
 }
 
 if ( args[0] == 'dist' ) {
-	args = ['lite', 'iscroll', 'zoom', 'probe'];
+	args = ['lite', 'iscroll', 'zoom', 'probe', 'infinite'];
 }
 
 // Get the list of files
@@ -139,5 +151,12 @@ function build (release) {
 	// Write dist file
 	var distFile = buildFile.replace('/build/', '/dist/').replace('.js', '-min.js');
 	out = uglify.minify(out, { fromString: true });
+
+	// Make sure dist folder exists
+	if ( !fs.existsSync('dist') ) {
+		fs.mkdirSync('dist');
+	}
+
+	// Write files to target
 	fs.writeFileSync(distFile, banner + out.code);
 }

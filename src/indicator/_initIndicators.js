@@ -1,66 +1,104 @@
 
 	_initIndicators: function () {
 		var interactive = this.options.interactiveScrollbars,
-			defaultScrollbars = typeof this.options.scrollbars != 'object',
-			indicator1,
-			indicator2;
+			customStyle = typeof this.options.scrollbars != 'string',
+			indicators = [],
+			indicator;
+
+		var that = this;
+
+		this.indicators = [];
 
 		if ( this.options.scrollbars ) {
 			// Vertical scrollbar
 			if ( this.options.scrollY ) {
-				indicator1 = {
+				indicator = {
 					el: createDefaultScrollbar('v', interactive, this.options.scrollbars),
 					interactive: interactive,
 					defaultScrollbars: true,
-					resize: this.options.resizeIndicator,
+					customStyle: customStyle,
+					resize: this.options.resizeScrollbars,
+					shrink: this.options.shrinkScrollbars,
+					fade: this.options.fadeScrollbars,
 					listenX: false
 				};
 
-				this.wrapper.appendChild(indicator1.el);
+				this.wrapper.appendChild(indicator.el);
+				indicators.push(indicator);
 			}
 
 			// Horizontal scrollbar
 			if ( this.options.scrollX ) {
-				indicator2 = {
+				indicator = {
 					el: createDefaultScrollbar('h', interactive, this.options.scrollbars),
 					interactive: interactive,
 					defaultScrollbars: true,
-					resize: this.options.resizeIndicator,
+					customStyle: customStyle,
+					resize: this.options.resizeScrollbars,
+					shrink: this.options.shrinkScrollbars,
+					fade: this.options.fadeScrollbars,
 					listenY: false
 				};
 
-				this.wrapper.appendChild(indicator2.el);
+				this.wrapper.appendChild(indicator.el);
+				indicators.push(indicator);
 			}
-		} else {
-			indicator1 = this.options.indicators.length ? this.options.indicators[0] : this.options.indicators;
-			indicator2 = this.options.indicators[1] && this.options.indicators[1];
 		}
 
-		if ( indicator1 ) {
-			this.indicator1 = new Indicator(this, indicator1);
+		if ( this.options.indicators ) {
+			// TODO: check concat compatibility
+			indicators = indicators.concat(this.options.indicators);
 		}
 
-		if ( indicator2 ) {
-			this.indicator2 = new Indicator(this, indicator2);
+		for ( var i = indicators.length; i--; ) {
+			this.indicators.push( new Indicator(this, indicators[i]) );
 		}
+
+		// TODO: check if we can use array.map (wide compatibility and performance issues)
+		function _indicatorsMap (fn) {
+			for ( var i = that.indicators.length; i--; ) {
+				fn.call(that.indicators[i]);
+			}
+		}
+
+		if ( this.options.fadeScrollbars ) {
+			this.on('scrollEnd', function () {
+				_indicatorsMap(function () {
+					this.fade();
+				});
+			});
+
+			this.on('scrollCancel', function () {
+				_indicatorsMap(function () {
+					this.fade();
+				});
+			});
+
+			this.on('scrollStart', function () {
+				_indicatorsMap(function () {
+					this.fade(1);
+				});
+			});
+
+			this.on('beforeScrollStart', function () {
+				_indicatorsMap(function () {
+					this.fade(1, true);
+				});
+			});
+		}
+
 
 		this.on('refresh', function () {
-			if ( this.indicator1 ) {
-				this.indicator1.refresh();
-			}
-
-			if ( this.indicator2 ) {
-				this.indicator2.refresh();
-			}
+			_indicatorsMap(function () {
+				this.refresh();
+			});
 		});
 
 		this.on('destroy', function () {
-			if ( this.indicator1 ) {
-				this.indicator1.destroy();
-			}
+			_indicatorsMap(function () {
+				this.destroy();
+			});
 
-			if ( this.indicator2 ) {
-				this.indicator2.destroy();
-			}
+			delete this.indicators;
 		});
 	},
